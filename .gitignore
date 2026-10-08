@@ -1,0 +1,7 @@
+# Local build outputs; retain FSP source and project configuration.
+/Debug/
+/Release/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.log
