@@ -110,8 +110,12 @@ class SerialLink:
         timeout: float = 0.1,
         write_timeout: float = 1.0,
         queue_size: int = 4096,
+        max_line_bytes: int = 16384,
         parser: ProtocolParser | None = None,
     ) -> None:
+        if max_line_bytes <= 0:
+            raise ValueError("max_line_bytes must be positive")
+        self.max_line_bytes = int(max_line_bytes)
         self.port = port
         self.baudrate = int(baudrate)
         self.timeout = float(timeout)
@@ -242,15 +246,39 @@ class SerialLink:
 
     def _reader_loop(self) -> None:
         failure = ""
+        pending = bytearray()
+        discarding = False
         while not self._stop.is_set():
             device = self._serial
             if device is None:
                 break
             try:
-                payload = device.readline()
+                # Timeouts may return only part of a line. Bound each read and
+                # retain fragments until LF, including across empty reads.
+                payload = device.read_until(b"\n", size=min(1024, self.max_line_bytes + 1))
                 if not payload:
                     continue
-                message = self._parser.feed_line(payload)
+                complete = payload.endswith(b"\n")
+                if discarding:
+                    if complete:
+                        discarding = False
+                    continue
+                pending.extend(payload)
+                if len(pending) > self.max_line_bytes:
+                    pending.clear()
+                    discarding = not complete
+                    self._emit(LinkEvent(
+                        "error", detail="串口数据行过长，已丢弃并等待下一行",
+                        timestamp=time.time(),
+                    ))
+                    continue
+                if not complete:
+                    continue
+                line = bytes(pending)
+                pending.clear()
+                if not line.strip(b"\r\n"):
+                    continue
+                message = self._parser.feed_line(line)
                 self._emit(LinkEvent("message", message=message, timestamp=message.timestamp))
             except (OSError, SerialException) as error:
                 if not self._stop.is_set():

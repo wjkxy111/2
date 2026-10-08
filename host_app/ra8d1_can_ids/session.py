@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import TextIO
@@ -43,6 +45,8 @@ def _message_from_dict(value: object) -> ProtocolMessage | None:
                   if isinstance(raw_fields, dict) else {})
         raw = str(value.get("raw", ""))
         timestamp = float(value.get("timestamp", 0.0))
+        if not math.isfinite(timestamp):
+            return None
         return ProtocolMessage(kind, fields, raw, timestamp)
     except (TypeError, ValueError, OverflowError):
         return None
@@ -55,7 +59,7 @@ class SessionRecorder:
         if max_records <= 0:
             raise ValueError("max_records must be positive")
         self.max_records = int(max_records)
-        self._records: list[ProtocolMessage] = []
+        self._records: deque[ProtocolMessage] = deque(maxlen=self.max_records)
         self._lock = threading.RLock()
         self._active = False
         self._stream: TextIO | None = None
@@ -114,7 +118,7 @@ class SessionRecorder:
             if len(self._records) >= self.max_records:
                 # Bound RAM while retaining the newest view.  The optional
                 # JSONL stream still preserves the complete on-disk session.
-                del self._records[0]
+                # deque evicts the oldest record in constant time on append.
                 self.dropped_records += 1
             self._records.append(message)
             if self._stream is not None:
@@ -238,8 +242,8 @@ class SessionReplay:
     ) -> int:
         """Deliver records to ``callback``; ``speed=0`` disables all delays."""
 
-        if speed < 0:
-            raise ValueError("speed must be non-negative")
+        if not math.isfinite(speed) or speed < 0:
+            raise ValueError("speed must be finite and non-negative")
         delivered = 0
         previous: float | None = None
         for message in self.records:

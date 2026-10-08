@@ -13,6 +13,36 @@ from ra8d1_can_ids.session import SessionRecorder, SessionReplay, load_jsonl
 
 
 class SessionTests(unittest.TestCase):
+    def test_bounded_recording_preserves_order_after_many_evictions(self) -> None:
+        recorder = SessionRecorder(max_records=3)
+        recorder.start()
+        for index in range(100):
+            recorder.ingest(parse_line(f"TELEM,T_MS,{index}", timestamp=float(index)))
+        self.assertEqual([97, 98, 99], [m.get_int("T_MS") for m in recorder.snapshot()])
+        self.assertEqual(97, recorder.dropped_records)
+        recorder.stop()
+        recorder.start(clear=False)
+        recorder.ingest(parse_line("TELEM,T_MS,100", timestamp=100.0))
+        self.assertEqual([98, 99, 100], [m.get_int("T_MS") for m in recorder.snapshot()])
+        self.assertEqual(98, recorder.dropped_records)
+        recorder.clear()
+        self.assertEqual(0, recorder.count)
+        self.assertEqual(0, recorder.dropped_records)
+        recorder.stop()
+
+    def test_replay_rejects_nonfinite_speed_and_skips_bad_timestamps(self) -> None:
+        for speed in (float("nan"), float("inf"), -1.0):
+            with self.assertRaises(ValueError):
+                SessionReplay([]).play(lambda _: None, speed=speed)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "timestamps.jsonl"
+            path.write_text(
+                '{"kind":"TELEM","timestamp":"NaN"}\n'
+                '{"kind":"TELEM","timestamp":"Infinity"}\n'
+                '{"kind":"TELEM","timestamp":3}\n', encoding="utf-8",
+            )
+            self.assertEqual([3.0], [m.timestamp for m in load_jsonl(path)])
+
     def test_record_jsonl_load_and_replay(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "capture.jsonl"

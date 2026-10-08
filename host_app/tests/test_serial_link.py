@@ -2,12 +2,53 @@ from __future__ import annotations
 
 import time
 import unittest
+from collections import deque
+from types import SimpleNamespace
 
 from ra8d1_can_ids.models import MessageKind
 from ra8d1_can_ids.serial_link import SerialLink, SerialPortInfo, preferred_serial_port
 
 
 class SerialLinkTests(unittest.TestCase):
+    def read_fragments(self, fragments: list[bytes], *, max_line_bytes: int = 16384):
+        link = SerialLink("test", max_line_bytes=max_line_bytes)
+        remaining = deque(fragments)
+
+        def read_until(expected: bytes, size: int) -> bytes:
+            self.assertEqual(b"\n", expected)
+            self.assertLessEqual(size, 1024)
+            if remaining:
+                return remaining.popleft()
+            link._stop.set()
+            return b""
+
+        link._serial = SimpleNamespace(read_until=read_until)
+        link._reader_loop()
+        return link.drain_events()
+
+    def test_timeout_fragments_are_parsed_only_after_newline(self) -> None:
+        events = self.read_fragments([
+            b"TELEM,T_MS,", b"", b"7,MODE,LEARN\r", b"\n", b"\r\n",
+        ])
+        self.assertEqual(1, len(events))
+        self.assertEqual(MessageKind.TELEM, events[0].message.kind)
+        self.assertEqual(7, events[0].message.get_int("T_MS"))
+
+    def test_oversized_line_discards_tail_and_recovers(self) -> None:
+        events = self.read_fragments([
+            b"x" * 32, b"x" * 32, b"x", b"TELEM,T_MS,9\n",
+            b"TELEM,T_MS,10,MODE,LEARN\n",
+        ], max_line_bytes=64)
+        self.assertEqual(["error", "message"], [event.type for event in events])
+        self.assertEqual(10, events[1].message.get_int("T_MS"))
+
+    def test_complete_oversized_line_and_invalid_limit(self) -> None:
+        events = self.read_fragments([b"x" * 64 + b"\n", b"q\n"], max_line_bytes=64)
+        self.assertEqual(["error", "message"], [event.type for event in events])
+        self.assertEqual("q", events[1].message.raw)
+        with self.assertRaises(ValueError):
+            SerialLink("test", max_line_bytes=0)
+
     def test_preferred_port_preserves_choice_and_prefers_usb_uart(self) -> None:
         ports = [
             SerialPortInfo("COM3", "Standard Serial over Bluetooth link", "BTHENUM"),
