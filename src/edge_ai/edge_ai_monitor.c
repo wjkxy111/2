@@ -43,6 +43,7 @@ edge_ai_health_t edge_ai_monitor_update(edge_ai_monitor_t * monitor,
     if (sensor_error)
     {
         monitor->health = EDGE_AI_HEALTH_SENSOR_ERROR;
+        monitor->alarm_streak = 0U;
         monitor->abnormal_streak = 0U;
         monitor->normal_streak = 0U;
     }
@@ -53,13 +54,18 @@ edge_ai_health_t edge_ai_monitor_update(edge_ai_monitor_t * monitor,
         {
             monitor->abnormal_streak++;
         }
-        if (monitor->abnormal_streak >= EDGE_AI_ALARM_CONFIRM_WINDOWS)
+        if (monitor->alarm_streak < UINT8_MAX)
+        {
+            monitor->alarm_streak++;
+        }
+        if (monitor->alarm_streak >= EDGE_AI_ALARM_CONFIRM_WINDOWS)
         {
             monitor->health = EDGE_AI_HEALTH_ALARM;
         }
     }
     else if (raw_warning)
     {
+        monitor->alarm_streak = 0U;
         monitor->normal_streak = 0U;
         if (monitor->abnormal_streak < UINT8_MAX)
         {
@@ -73,6 +79,7 @@ edge_ai_health_t edge_ai_monitor_update(edge_ai_monitor_t * monitor,
     }
     else
     {
+        monitor->alarm_streak = 0U;
         monitor->abnormal_streak = 0U;
         if (monitor->normal_streak < UINT8_MAX)
         {

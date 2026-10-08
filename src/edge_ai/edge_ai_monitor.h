@@ -37,6 +37,7 @@ typedef struct
 {
     edge_ai_health_t health;
     uint8_t abnormal_streak;
+    uint8_t alarm_streak; /* Consecutive severe windows, excluding warnings. */
     uint8_t normal_streak;
     edge_ai_event_t events[EDGE_AI_EVENT_CAPACITY];
     uint8_t event_head;
